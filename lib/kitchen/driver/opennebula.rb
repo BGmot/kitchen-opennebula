@@ -56,6 +56,7 @@ module Kitchen
       default_config :no_ssh_tcp_check_sleep, 120
       default_config :no_passwordless_sudo_check, false
       default_config :no_passwordless_sudo_sleep, 120
+      default_config :new_image_name, ''
       
       def initialize(config)
         super
@@ -164,6 +165,32 @@ module Kitchen
       end
 
       def destroy(state)
+        if state.has_key?(:vm_id)
+          conn = opennebula_connect
+          # VM still exists in test-kitchen context
+          if not conn.list_vms({:id => state[:vm_id]}).empty?
+            # VM still exists in ON
+            if state[:last_action] == 'verify' and
+               config[:new_image_name] != ''
+              # Create new image only if all tests passed and new image name is specified
+              info('Creating new image...')
+              rc = conn.vm_disk_snapshot(state[:vm_id], 0, config[:new_image_name])
+              (1..5).each do # wait maximum 5 seconds
+                sleep(1) # The delay is needed for some reason between issueing disk-snapshot and shutdown
+                images = conn.image_pool( { :mine => true, :id => rc } )
+                images.each do |i|
+                 if i.state == 4 # LOCKED
+                   break
+                 end
+                end
+              end
+              info("New Image has been successfully created, Image ID = #{rc}.")
+              conn.servers.shutdown(state[:vm_id])
+            else
+              conn.servers.destroy(state[:vm_id])
+            end
+          end
+        end
         conn = opennebula_connect
         conn.servers.destroy(state[:vm_id])
       end
